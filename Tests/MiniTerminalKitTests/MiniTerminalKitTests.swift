@@ -13,6 +13,47 @@ final class MiniTerminalKitTests: XCTestCase {
             "hello"
         )
     }
+    
+    func testADBPromptWhoamiLineFeedStartsAtColumnZero() {
+        let terminal = TerminalEmulator(rows: 5, columns: 40)
+
+        terminal.feed("c2s:/ $ ")
+        terminal.feed("whoami\n")
+        terminal.feed("shell\n")
+        terminal.feed("c2s:/ $ ")
+
+        let lines = terminal.screen.plainTextLines()
+
+        XCTAssertTrue(lines[0].hasPrefix("c2s:/ $ whoami"))
+        XCTAssertTrue(lines[1].hasPrefix("shell"))
+        XCTAssertTrue(lines[2].hasPrefix("c2s:/ $ "))
+    }
+    
+    func testCRLFDoesNotIndentNextLine() {
+        let terminal = TerminalEmulator(rows: 4, columns: 40)
+
+        terminal.feed("abc\r\n")
+        terminal.feed("def")
+
+        let lines = terminal.screen.plainTextLines()
+
+        XCTAssertTrue(lines[0].hasPrefix("abc"))
+        XCTAssertTrue(lines[1].hasPrefix("def"))
+    }
+    
+    func testADBIdOutputStartsAtColumnZeroAfterLineFeed() {
+        let terminal = TerminalEmulator(rows: 8, columns: 80)
+
+        terminal.feed("c2s:/ $ id\n")
+        terminal.feed("uid=2000(shell) gid=2000(shell) groups=2000(shell),1004(input),1007(log)\n")
+        terminal.feed("c2s:/ $ ")
+
+        let lines = terminal.screen.plainTextLines()
+
+        XCTAssertTrue(lines[0].hasPrefix("c2s:/ $ id"))
+        XCTAssertTrue(lines[1].hasPrefix("uid=2000(shell)"))
+        XCTAssertTrue(lines[2].hasPrefix("c2s:/ $ "))
+    }
 
     func testCarriageReturnOverwrite() {
         let terminal = TerminalEmulator(rows: 3, columns: 10)

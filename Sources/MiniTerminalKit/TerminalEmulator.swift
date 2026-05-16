@@ -5,11 +5,13 @@ import Combine
 public final class TerminalEmulator: ObservableObject {
     @Published public private(set) var screen: TerminalScreen
     @Published public private(set) var scrollback: [[TerminalCell]] = []
+    @Published public private(set) var revision: Int = 0
 
     public var maxScrollbackLines: Int
 
     private let parser = ANSIParser()
     private var currentStyle: TerminalStyle = .normal
+    private var pendingWrap: Bool = false
 
     private var savedCursorRow: Int = 0
     private var savedCursorColumn: Int = 0
@@ -33,23 +35,39 @@ public final class TerminalEmulator: ObservableObject {
         }
     }
 
+    public func plainText(showsScrollback: Bool = true) -> String {
+        let rows = showsScrollback ? visibleCells : screen.cells
+
+        return rows
+            .map { row in
+                String(row.map(\.character)).trimmingCharacters(in: .whitespaces)
+            }
+            .joined(separator: "\n")
+    }
+
     public func feed(_ chunk: String) {
         parser.feed(chunk) { [weak self] event in
             self?.handle(event)
         }
+
+        bumpRevision()
     }
 
     public func reset() {
         parser.reset()
         currentStyle = .normal
+        pendingWrap = false
         savedCursorRow = 0
         savedCursorColumn = 0
         scrollback.removeAll()
         screen = TerminalScreen(rows: screen.rows, columns: screen.columns)
+
+        bumpRevision()
     }
 
     public func clearScrollback() {
         scrollback.removeAll()
+        bumpRevision()
     }
 
     public func resize(rows: Int, columns: Int) {
@@ -71,6 +89,13 @@ public final class TerminalEmulator: ObservableObject {
         newScreen.cursorColumn = min(screen.cursorColumn, newColumns - 1)
 
         screen = newScreen
+        pendingWrap = false
+
+        bumpRevision()
+    }
+
+    private func bumpRevision() {
+        revision &+= 1
     }
 
     private func handle(_ event: ANSIEvent) {
@@ -79,15 +104,19 @@ public final class TerminalEmulator: ObservableObject {
             put(char)
 
         case .newline:
+            pendingWrap = false
             newline()
 
         case .carriageReturn:
+            pendingWrap = false
             screen.cursorColumn = 0
 
         case .backspace:
+            pendingWrap = false
             screen.cursorColumn = max(0, screen.cursorColumn - 1)
 
         case .tab:
+            pendingWrap = false
             tab()
 
         case .saveCursor:
@@ -95,29 +124,37 @@ public final class TerminalEmulator: ObservableObject {
             savedCursorColumn = screen.cursorColumn
 
         case .restoreCursor:
+            pendingWrap = false
             screen.cursorRow = clamp(savedCursorRow, 0, screen.rows - 1)
             screen.cursorColumn = clamp(savedCursorColumn, 0, screen.columns - 1)
 
         case .cursorUp(let count):
+            pendingWrap = false
             screen.cursorRow = max(0, screen.cursorRow - count)
 
         case .cursorDown(let count):
+            pendingWrap = false
             screen.cursorRow = min(screen.rows - 1, screen.cursorRow + count)
 
         case .cursorForward(let count):
+            pendingWrap = false
             screen.cursorColumn = min(screen.columns - 1, screen.cursorColumn + count)
 
         case .cursorBack(let count):
+            pendingWrap = false
             screen.cursorColumn = max(0, screen.cursorColumn - count)
 
         case .cursorPosition(let row, let column):
+            pendingWrap = false
             screen.cursorRow = clamp(row - 1, 0, screen.rows - 1)
             screen.cursorColumn = clamp(column - 1, 0, screen.columns - 1)
 
         case .eraseDisplay(let mode):
+            pendingWrap = false
             eraseDisplay(mode)
 
         case .eraseLine(let mode):
+            pendingWrap = false
             eraseLine(mode)
 
         case .sgr(let params):
@@ -129,6 +166,11 @@ public final class TerminalEmulator: ObservableObject {
     }
 
     private func put(_ char: Character) {
+        if pendingWrap {
+            pendingWrap = false
+            newline()
+        }
+
         guard screen.cursorRow >= 0,
               screen.cursorRow < screen.rows,
               screen.cursorColumn >= 0,
@@ -143,8 +185,7 @@ public final class TerminalEmulator: ObservableObject {
         )
 
         if screen.cursorColumn == screen.columns - 1 {
-            screen.cursorColumn = 0
-            newline()
+            pendingWrap = true
         } else {
             screen.cursorColumn += 1
         }
@@ -161,6 +202,11 @@ public final class TerminalEmulator: ObservableObject {
     }
 
     private func tab() {
+        if pendingWrap {
+            pendingWrap = false
+            newline()
+        }
+
         let nextTab = ((screen.cursorColumn / 8) + 1) * 8
         screen.cursorColumn = min(nextTab, screen.columns - 1)
     }

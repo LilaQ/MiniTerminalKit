@@ -17,12 +17,13 @@ public struct TerminalScreenView: View {
 
     public var body: some View {
         ScrollView([.vertical, .horizontal]) {
-            VStack(alignment: .leading, spacing: 0) {
+            LazyVStack(alignment: .leading, spacing: 0) {
                 ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
                     Text(attributedLine(row))
                         .font(.system(size: fontSize, design: .monospaced))
-                        .textSelection(.enabled)
                         .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .textSelection(.enabled)
                 }
             }
             .padding(8)
@@ -39,6 +40,7 @@ public struct TerminalScreenView: View {
 
         for cell in cells {
             var piece = AttributedString(String(cell.character))
+
             piece.foregroundColor = foregroundColor(for: cell.style)
             piece.backgroundColor = backgroundColor(for: cell.style)
             piece.font = .system(
@@ -55,7 +57,7 @@ public struct TerminalScreenView: View {
 
     private func foregroundColor(for style: TerminalStyle) -> Color {
         if style.inverse {
-            return .black
+            return color(style.background) ?? .black
         }
 
         return color(style.foreground) ?? .white
@@ -63,7 +65,7 @@ public struct TerminalScreenView: View {
 
     private func backgroundColor(for style: TerminalStyle) -> Color {
         if style.inverse {
-            return .white
+            return color(style.foreground) ?? .white
         }
 
         return color(style.background) ?? .black

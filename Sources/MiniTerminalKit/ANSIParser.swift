@@ -34,86 +34,118 @@ enum ANSIEvent {
 
 final class ANSIParser {
     private var state: ParserState = .normal
+    private var pendingCarriageReturns: Int = 0
 
     func reset() {
         state = .normal
+        pendingCarriageReturns = 0
     }
 
     func feed(_ string: String, emit: (ANSIEvent) -> Void) {
-        for char in string {
-            consume(char, emit: emit)
+        for scalar in string.unicodeScalars {
+            consume(scalar, emit: emit)
         }
     }
 
-    private func consume(_ char: Character, emit: (ANSIEvent) -> Void) {
+    private func consume(_ scalar: UnicodeScalar, emit: (ANSIEvent) -> Void) {
         switch state {
         case .normal:
-            switch char {
-            case "\u{001B}":
-                state = .escape
-            case "\n":
-                emit(.newline)
-            case "\r":
-                emit(.carriageReturn)
-            case "\u{0008}":
-                emit(.backspace)
-            case "\t":
-                emit(.tab)
-            default:
-                emit(.printable(char))
-            }
+            consumeNormal(scalar, emit: emit)
 
         case .escape:
-            switch char {
-            case "[":
-                state = .csi(buffer: "")
-            case "]":
-                state = .osc(buffer: "")
-            case "s":
-                emit(.saveCursor)
-                state = .normal
-            case "u":
-                emit(.restoreCursor)
-                state = .normal
-            default:
-                emit(.ignored)
-                state = .normal
-            }
+            consumeEscape(scalar, emit: emit)
 
         case .csi(let buffer):
-            if isCSIFinalByte(char) {
-                parseCSI(buffer: buffer, final: char, emit: emit)
+            if isCSIFinalByte(scalar) {
+                parseCSI(buffer: buffer, final: Character(scalar), emit: emit)
                 state = .normal
             } else {
-                state = .csi(buffer: buffer + String(char))
+                state = .csi(buffer: buffer + String(scalar))
             }
 
         case .osc(let buffer):
-            if char == "\u{0007}" {
+            if scalar.value == 0x07 {
                 emit(.ignored)
                 state = .normal
-            } else if char == "\u{001B}" {
+            } else if scalar.value == 0x1B {
                 state = .oscEscape(buffer: buffer)
             } else {
-                state = .osc(buffer: buffer + String(char))
+                state = .osc(buffer: buffer + String(scalar))
             }
 
         case .oscEscape(let buffer):
-            if char == "\\" {
+            if scalar == "\\" {
                 emit(.ignored)
                 state = .normal
             } else {
-                state = .osc(buffer: buffer + "\u{001B}" + String(char))
+                state = .osc(buffer: buffer + "\u{001B}" + String(scalar))
             }
         }
     }
 
-    private func isCSIFinalByte(_ char: Character) -> Bool {
-        guard let scalar = char.unicodeScalars.first else {
-            return false
+    private func consumeNormal(_ scalar: UnicodeScalar, emit: (ANSIEvent) -> Void) {
+        switch scalar.value {
+        case 0x0D:
+            // CR
+            pendingCarriageReturns += 1
+
+        case 0x0A:
+            // LF.
+            // LF, CRLF and CRCRLF become exactly one terminal newline.
+            pendingCarriageReturns = 0
+            emit(.newline)
+
+        case 0x1B:
+            flushPendingCarriageReturn(emit: emit)
+            state = .escape
+
+        case 0x08:
+            flushPendingCarriageReturn(emit: emit)
+            emit(.backspace)
+
+        case 0x09:
+            flushPendingCarriageReturn(emit: emit)
+            emit(.tab)
+
+        default:
+            flushPendingCarriageReturn(emit: emit)
+            emit(.printable(Character(scalar)))
+        }
+    }
+
+    private func flushPendingCarriageReturn(emit: (ANSIEvent) -> Void) {
+        guard pendingCarriageReturns > 0 else {
+            return
         }
 
-        return scalar.value >= 0x40 && scalar.value <= 0x7E
+        emit(.carriageReturn)
+        pendingCarriageReturns = 0
+    }
+
+    private func consumeEscape(_ scalar: UnicodeScalar, emit: (ANSIEvent) -> Void) {
+        switch scalar {
+        case "[":
+            state = .csi(buffer: "")
+
+        case "]":
+            state = .osc(buffer: "")
+
+        case "s":
+            emit(.saveCursor)
+            state = .normal
+
+        case "u":
+            emit(.restoreCursor)
+            state = .normal
+
+        default:
+            emit(.ignored)
+            state = .normal
+        }
+    }
+
+    private func isCSIFinalByte(_ scalar: UnicodeScalar) -> Bool {
+        scalar.value >= 0x40 && scalar.value <= 0x7E
     }
 
     private func parseCSI(buffer: String, final: Character, emit: (ANSIEvent) -> Void) {
@@ -127,10 +159,13 @@ final class ANSIParser {
         switch final {
         case "A":
             emit(.cursorUp(param(params, 0, default: 1)))
+
         case "B":
             emit(.cursorDown(param(params, 0, default: 1)))
+
         case "C":
             emit(.cursorForward(param(params, 0, default: 1)))
+
         case "D":
             emit(.cursorBack(param(params, 0, default: 1)))
 
